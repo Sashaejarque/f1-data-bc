@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiTags, ApiParam, ApiOkResponse } from '@nestjs/swagger';
+import { ApiOperation, ApiQuery, ApiTags, ApiParam, ApiOkResponse, ApiServiceUnavailableResponse } from '@nestjs/swagger';
 import { OpenF1Service } from './openf1.service';
-import { DriverSummary, LastRaceResult, RaceTelemetry } from './openf1.interfaces';
+import { DriverSummary, LastRaceResult, RaceTelemetry, RaceAnalysis } from './openf1.interfaces';
 
 @Controller('openf1')
 @ApiTags('openf1')
@@ -116,5 +116,85 @@ export class OpenF1Controller {
     @Query('driverNumber', ParseIntPipe) driverNumber: number,
   ): Promise<RaceTelemetry> {
     return this.openf1.getRaceTelemetry(sessionKey, driverNumber);
+  }
+
+  // GET /openf1/telemetry/:sessionKey/:driverNumber/analysis
+  @Get('telemetry/:sessionKey/:driverNumber/analysis')
+  @ApiOperation({
+    summary: 'Get AI-powered race analysis',
+    description: 'Fetches telemetry data and sends it to the AI service for comprehensive race analysis including strategy recommendations and performance insights.',
+  })
+  @ApiParam({ name: 'sessionKey', type: Number, description: 'Session key of the race' })
+  @ApiParam({ name: 'driverNumber', type: Number, description: 'Driver number' })
+  @ApiOkResponse({
+    description: 'AI-generated race analysis',
+    schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'Brief race summary' },
+        key_findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              topic: { type: 'string' },
+              description: { type: 'string' },
+              evidence: { type: 'string' },
+              impact: { type: 'string' },
+            },
+          },
+        },
+        strategy_next_race: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              area: { type: 'string' },
+              action: { type: 'string' },
+              expected_gain: { type: 'string' },
+            },
+          },
+        },
+        stint_review: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              compound: { type: 'string' },
+              pace_trend: { type: 'string' },
+              consistency: { type: 'string' },
+              notes: { type: 'string' },
+            },
+          },
+        },
+      },
+      example: {
+        summary: 'Análisis de la carrera: 58 vueltas completadas con 1 parada de pits, compuestos MEDIUM y HARD.',
+        key_findings: [
+          {
+            topic: 'Degradación de neumáticos',
+            description: 'Se observó degradación progresiva en stint de MEDIUM (vueltas 1-23)',
+            evidence: 'lapDuration aumentó de 89.1s a 91.4s',
+            impact: 'Pérdida de ~0.5s por vuelta al final del stint',
+          },
+        ],
+        strategy_next_race: [
+          {
+            area: 'Gestión de neumáticos',
+            action: 'Considerar parada más temprana o compuesto más duro',
+            expected_gain: 'Mejora de ~3-5s en tiempo total',
+          },
+        ],
+      },
+    },
+  })
+  @ApiServiceUnavailableResponse({
+    description: 'AI analysis service is temporarily unavailable',
+  })
+  async getRaceAnalysis(
+    @Param('sessionKey', ParseIntPipe) sessionKey: number,
+    @Param('driverNumber', ParseIntPipe) driverNumber: number,
+  ): Promise<RaceAnalysis> {
+    return this.openf1.getRaceAnalysis(sessionKey, driverNumber);
   }
 }

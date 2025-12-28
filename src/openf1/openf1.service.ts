@@ -17,6 +17,7 @@ import {
   RaceTelemetryLap,
   WeatherSnapshot,
   PitStopInfo,
+  RaceAnalysis,
 } from './openf1.interfaces';
 
 const BASE_URL = 'https://api.openf1.org/v1';
@@ -246,6 +247,48 @@ export class OpenF1Service {
       throw new HttpException(
         { message: 'OpenF1 telemetry error', details: message, sessionKey, driverNumber },
         status,
+      );
+    }
+  }
+
+  // CASO DE USO 4: Análisis de Carrera con IA
+  async getRaceAnalysis(sessionKey: number, driverNumber: number): Promise<RaceAnalysis> {
+    const aiServiceUrl = process.env.AI_SERVICE_URL;
+
+    if (!aiServiceUrl) {
+      throw new HttpException(
+        { message: 'AI_SERVICE_URL not configured in environment variables' },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+
+    try {
+      // Obtener telemetría base
+      const telemetryData = await this.getRaceTelemetry(sessionKey, driverNumber);
+
+      // Enviar al servicio de IA
+      const obs = this.http.post<RaceAnalysis>(`${aiServiceUrl}/analyze`, telemetryData);
+      const response = await lastValueFrom(obs);
+
+      return response.data;
+    } catch (err: any) {
+      // Si es un error de telemetría, propagar
+      if (err instanceof HttpException) {
+        throw err;
+      }
+
+      // Error del servicio de IA
+      const status = err?.response?.status ?? HttpStatus.SERVICE_UNAVAILABLE;
+      const message = err?.response?.data ?? err?.message ?? 'AI analysis service failed';
+      
+      throw new HttpException(
+        {
+          message: 'AI analysis service temporarily unavailable',
+          details: message,
+          sessionKey,
+          driverNumber,
+        },
+        status === HttpStatus.NOT_FOUND ? HttpStatus.SERVICE_UNAVAILABLE : status,
       );
     }
   }

@@ -1,14 +1,23 @@
 # OpenF1 Service (NestJS)
 
-A lightweight NestJS service that proxies and orchestrates data from the public OpenF1 API (`https://api.openf1.org/v1`). Includes Swagger docs, strong typing, and basic error handling.
+A lightweight NestJS service that proxies and orchestrates data from the public OpenF1 API (`https://api.openf1.org/v1`). Includes Swagger docs, strong typing, and basic error handling. Also integrates with an AI service for race analysis.
 
 ## Quick Start
 ```bash
 npm install
+
+# Configure environment
+cp .env.example .env
+# Edit .env and set AI_SERVICE_URL (e.g., http://localhost:8080)
+
 npm run start
 # API base: http://localhost:3000/api
 # Swagger:   http://localhost:3000/api/docs
 ```
+
+## Environment Variables
+- `AI_SERVICE_URL`: URL of the AI analysis service (required for analysis endpoint)
+- `PORT`: Server port (optional, defaults to 3000)
 
 ## Endpoints
 - GET `/api/openf1/drivers`
@@ -25,6 +34,12 @@ npm run start
 	- Pit stops disponibles a nivel raíz (`pitStops[]`), no dentro de cada vuelta.
 	- Omite claves con valor `null` en la respuesta para evitar confusiones con sensores.
 	- Returns `{ raceSummary, pitStops[], telemetry[] }`.
+
+- GET `/api/openf1/telemetry/:sessionKey/:driverNumber/analysis`
+	- Obtiene los datos de telemetría y los envía al servicio de IA para análisis completo.
+	- Requiere `AI_SERVICE_URL` configurado en el entorno.
+	- Returns análisis con `summary`, `key_findings`, `strategy_next_race`, `stint_review`.
+	- En caso de error del servicio de IA, devuelve 503 Service Unavailable.
 
 ## Swagger
 - Served at `/api/docs` (Swagger UI).

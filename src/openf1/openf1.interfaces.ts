@@ -128,4 +128,26 @@ export interface RaceTelemetry {
   telemetry: RaceTelemetryLap[];
 }
 
+export interface RaceAnalysis {
+  summary?: string;
+  key_findings?: Array<{
+    topic?: string;
+    description?: string;
+    evidence?: string;
+    impact?: string;
+  }>;
+  strategy_next_race?: Array<{
+    area?: string;
+    action?: string;
+    expected_gain?: string;
+  }>;
+  stint_review?: Array<{
+    compound?: string;
+    pace_trend?: string;
+    consistency?: string;
+    notes?: string;
+  }>;
+  [key: string]: any; // Flexible para cualquier estructura de respuesta del AI
+}
+
 export type AxiosObs<T> = Promise<AxiosResponse<T>>;
