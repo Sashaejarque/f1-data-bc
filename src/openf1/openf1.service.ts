@@ -51,6 +51,31 @@ function closestWeatherSnapshotMs(lapTs: number | null, weather: WeatherApiDTO[]
   };
 }
 
+// Deeply remove properties with value === null from objects/arrays
+function omitNullsDeep<T>(value: T): T {
+  if (value === null) {
+    // Callers should decide whether to keep parent key; returning undefined helps when spreading
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return (value.map((v) => omitNullsDeep(v)) as unknown) as T;
+  }
+  if (typeof value === 'object') {
+    const input = value as Record<string, any>;
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(input)) {
+      if (v === null) continue; // omit nulls
+      const cleaned = omitNullsDeep(v);
+      // Always keep values that are not null after cleaning (including false/0/empty string/empty object)
+      if (cleaned !== null) {
+        out[k] = cleaned;
+      }
+    }
+    return (out as unknown) as T;
+  }
+  return value;
+}
+
 @Injectable()
 export class OpenF1Service {
   constructor(private readonly http: HttpService) {}
@@ -163,6 +188,11 @@ export class OpenF1Service {
       for (const p of (pits ?? [])) {
         pitByLap.set(p.lap_number, p);
       }
+      const pitStops = (pits ?? []).map((p): PitStopInfo => ({
+        lapNumber: p.lap_number,
+        duration: p.pit_duration ?? null,
+        totalDuration: p.total_duration ?? null,
+      }));
 
       const compounds = new Set<string>();
       let lastStartMs: number | null = null;
@@ -173,15 +203,6 @@ export class OpenF1Service {
         const stint = (stints ?? []).find((s) => lapNo >= s.lap_start && lapNo <= s.lap_end) ?? null;
         const compound = stint?.compound ?? null;
         if (compound) compounds.add(compound);
-
-        const pit = pitByLap.get(lapNo) ?? null;
-        const pitInfo: PitStopInfo | null = pit
-          ? {
-              lapNumber: pit.lap_number,
-              duration: pit.pit_duration ?? null,
-              totalDuration: pit.total_duration ?? null,
-            }
-          : null;
 
         const lapDuration = lap.lap_duration ?? lap.duration ?? null;
         const sector1 = lap.duration_sector_1 ?? lap.sector1 ?? null;
@@ -206,7 +227,6 @@ export class OpenF1Service {
           sector2,
           sector3,
           tireCompound: compound,
-          pitStop: pitInfo,
           weather: weatherSnapshot,
         };
       });
@@ -217,7 +237,9 @@ export class OpenF1Service {
         compoundsUsed: Array.from(compounds.values()),
       };
 
-      return { raceSummary, telemetry };
+      // Return without any null-valued keys to avoid confusing downstream AI
+      const result = { raceSummary, pitStops, telemetry };
+      return omitNullsDeep(result) as RaceTelemetry;
     } catch (err: any) {
       const status = err?.response?.status ?? HttpStatus.BAD_GATEWAY;
       const message = err?.response?.data ?? err?.message ?? 'OpenF1 telemetry merge failed';

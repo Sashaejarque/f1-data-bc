@@ -115,7 +115,6 @@ export interface RaceTelemetryLap {
   sector2?: number | null;
   sector3?: number | null;
   tireCompound?: string | null;
-  pitStop?: PitStopInfo | null;
   weather?: WeatherSnapshot | null;
 }
 
@@ -125,6 +124,7 @@ export interface RaceTelemetry {
     totalPitStops: number;
     compoundsUsed: string[];
   };
+  pitStops: PitStopInfo[];
   telemetry: RaceTelemetryLap[];
 }
 

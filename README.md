@@ -21,8 +21,10 @@ npm run start
 
 - GET `/api/openf1/telemetry?sessionKey=###&driverNumber=###`
 	- Parallel fetch: `/laps`, `/stints`, `/pit`, `/weather`.
-	- Merges per lap: compound (stint range), pit stop (if any), nearest weather (by timestamp), lap/sector durations.
-	- Returns `{ raceSummary, telemetry[] }`.
+	- Merges per lap: compound (stint range), nearest weather (por timestamp), lap/sector durations.
+	- Pit stops disponibles a nivel raíz (`pitStops[]`), no dentro de cada vuelta.
+	- Omite claves con valor `null` en la respuesta para evitar confusiones con sensores.
+	- Returns `{ raceSummary, pitStops[], telemetry[] }`.
 
 ## Swagger
 - Served at `/api/docs` (Swagger UI).
@@ -33,3 +35,4 @@ npm run start
 - Telemetry maps `lap_duration` and `duration_sector_1/2/3` fields; falls back to legacy `duration`/`sector1/2/3` if needed.
 - When `date_start` is missing in laps, start time is inferred from prior lap + `lap_duration`; if it cannot be inferred, weather is left null for that lap.
 - The last-race endpoint is pinned to 2025 as requested. Adjust in `getLastRaceResult` if future seasons are needed.
+- `telemetry[].pitStop` fue eliminado; usar `pitStops[]` top-level. Las claves con `null` no aparecen en el JSON final.
