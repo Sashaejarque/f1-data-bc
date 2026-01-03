@@ -127,64 +127,72 @@ export class OpenF1Controller {
   @ApiParam({ name: 'sessionKey', type: Number, description: 'Session key of the race' })
   @ApiParam({ name: 'driverNumber', type: Number, description: 'Driver number' })
   @ApiOkResponse({
-    description: 'AI-generated race analysis',
+    description: 'AI-generated race analysis with strategic insights and findings',
     schema: {
       type: 'object',
       properties: {
-        summary: { type: 'string', description: 'Brief race summary' },
+        summary: { 
+          type: 'string', 
+          description: 'Brief race summary and overall performance analysis' 
+        },
         key_findings: {
           type: 'array',
+          description: 'Array of key findings from the race analysis',
           items: {
             type: 'object',
             properties: {
-              topic: { type: 'string' },
-              description: { type: 'string' },
-              evidence: { type: 'string' },
-              impact: { type: 'string' },
+              topic: { 
+                type: 'string',
+                description: 'Topic of the finding (e.g., tire degradation, pit strategy)' 
+              },
+              description: { 
+                type: 'string',
+                description: 'Detailed description of the finding' 
+              },
+              severity: { 
+                type: 'string',
+                enum: ['low', 'med', 'high'],
+                description: 'Severity level of the finding' 
+              },
             },
+            required: ['topic', 'description', 'severity'],
           },
         },
-        strategy_next_race: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              area: { type: 'string' },
-              action: { type: 'string' },
-              expected_gain: { type: 'string' },
+        strategic_report: {
+          type: 'object',
+          description: 'Strategic recommendations for future races',
+          properties: {
+            race_narrative: { 
+              type: 'string',
+              description: 'Narrative summary of how the race unfolded' 
+            },
+            next_race_projections: { 
+              type: 'string',
+              description: 'Projections and recommendations for the next race' 
             },
           },
-        },
-        stint_review: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              compound: { type: 'string' },
-              pace_trend: { type: 'string' },
-              consistency: { type: 'string' },
-              notes: { type: 'string' },
-            },
-          },
+          required: ['race_narrative', 'next_race_projections'],
         },
       },
+      required: ['summary', 'key_findings', 'strategic_report'],
       example: {
-        summary: 'Análisis de la carrera: 58 vueltas completadas con 1 parada de pits, compuestos MEDIUM y HARD.',
+        summary: 'Sólido desempeño con gestión de neumáticos eficiente. 58 vueltas completadas con 1 parada de pits.',
         key_findings: [
           {
             topic: 'Degradación de neumáticos',
             description: 'Se observó degradación progresiva en stint de MEDIUM (vueltas 1-23)',
-            evidence: 'lapDuration aumentó de 89.1s a 91.4s',
-            impact: 'Pérdida de ~0.5s por vuelta al final del stint',
+            severity: 'med',
           },
-        ],
-        strategy_next_race: [
           {
-            area: 'Gestión de neumáticos',
-            action: 'Considerar parada más temprana o compuesto más duro',
-            expected_gain: 'Mejora de ~3-5s en tiempo total',
+            topic: 'Consistencia en sector 2',
+            description: 'Sector 2 mostró variabilidad sin patrón claro de degradación',
+            severity: 'low',
           },
         ],
+        strategic_report: {
+          race_narrative: 'El piloto mantuvo un ritmo consistente durante las primeras 23 vueltas con compuesto MEDIUM. La parada de pits fue oportuna, cambiando a HARD para gestionar el final de la carrera.',
+          next_race_projections: 'Para la próxima carrera, considerar una estrategia de parada más temprana si las condiciones de pista son similares. El HARD podría ser más competitivo desde la vuelta 15-20.',
+        },
       },
     },
   })
