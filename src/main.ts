@@ -7,6 +7,16 @@ async function bootstrap() {
   const app = await NestFactory.create(OpenF1Module);
   app.setGlobalPrefix('api');
 
+  // Configure CORS
+  const frontendUrl = process.env.FRONTEND_URL;
+  const corsOptions = {
+    origin: frontendUrl || '*', // Allow all in dev if not specified, restrict to FRONTEND_URL in prod
+    methods: ['GET', 'POST'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  };
+  app.enableCors(corsOptions);
+
   const config = new DocumentBuilder()
     .setTitle('OpenF1 Service')
     .setDescription('API proxy/orchestrator for OpenF1 public data')
@@ -20,6 +30,10 @@ async function bootstrap() {
   // eslint-disable-next-line no-console
   console.log(`OpenF1 service running at http://localhost:${port}/api/openf1`);
   console.log(`Swagger docs available at http://localhost:${port}/api/docs`);
+  if (frontendUrl) {
+    // eslint-disable-next-line no-console
+    console.log(`CORS restricted to: ${frontendUrl}`);
+  }
 }
 
 bootstrap();

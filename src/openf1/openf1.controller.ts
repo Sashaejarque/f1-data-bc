@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags, ApiParam, ApiOkResponse, ApiServiceUnavailableResponse } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { OpenF1Service } from './openf1.service';
 import { DriverSummary, LastRaceResult, RaceTelemetry, RaceAnalysis } from './openf1.interfaces';
 
@@ -119,6 +120,7 @@ export class OpenF1Controller {
   }
 
   // GET /openf1/telemetry/:sessionKey/:driverNumber/analysis
+  @Throttle({ default: { limit: 3, ttl: 60 } })
   @Get('telemetry/:sessionKey/:driverNumber/analysis')
   @ApiOperation({
     summary: 'Get AI-powered race analysis',
