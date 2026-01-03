@@ -254,6 +254,7 @@ export class OpenF1Service {
   // CASO DE USO 4: Análisis de Carrera con IA
   async getRaceAnalysis(sessionKey: number, driverNumber: number): Promise<RaceAnalysis> {
     const aiServiceUrl = process.env.AI_SERVICE_URL;
+    const aiServiceSecret = process.env.AI_SERVICE_SECRET;
 
     if (!aiServiceUrl) {
       throw new HttpException(
@@ -262,12 +263,24 @@ export class OpenF1Service {
       );
     }
 
+    if (!aiServiceSecret) {
+      throw new HttpException(
+        { message: 'AI_SERVICE_SECRET not configured in environment variables' },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+
     try {
       // Obtener telemetría base
       const telemetryData = await this.getRaceTelemetry(sessionKey, driverNumber);
 
-      // Enviar al servicio de IA
-      const obs = this.http.post<RaceAnalysis>(`${aiServiceUrl}/analyze`, telemetryData);
+      // Enviar al servicio de IA con header de autenticación
+      const obs = this.http.post<RaceAnalysis>(`${aiServiceUrl}/analyze`, telemetryData, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Secret': aiServiceSecret,
+        },
+      });
       const response = await lastValueFrom(obs);
 
       return response.data;

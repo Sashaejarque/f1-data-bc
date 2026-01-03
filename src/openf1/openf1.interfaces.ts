@@ -128,14 +128,26 @@ export interface RaceTelemetry {
   telemetry: RaceTelemetryLap[];
 }
 
-export interface RaceAnalysis {
-  summary?: string;
-  key_findings?: Array<{
-    topic?: string;
-    description?: string;
-    evidence?: string;
-    impact?: string;
-  }>;
+// AI Service Response Interfaces
+export interface Finding {
+  topic: string;
+  description: string;
+  severity: 'low' | 'med' | 'high';
+}
+
+export interface StrategicReport {
+  race_narrative: string;
+  next_race_projections: string;
+}
+
+export interface AIOutput {
+  summary: string;
+  key_findings: Finding[];
+  strategic_report: StrategicReport;
+}
+
+export interface RaceAnalysis extends AIOutput {
+  // Extended with additional fields for backward compatibility
   strategy_next_race?: Array<{
     area?: string;
     action?: string;
