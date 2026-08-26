@@ -81,13 +81,22 @@ function omitNullsDeep<T>(value: T): T {
 export class OpenF1Service {
   constructor(private readonly http: HttpService) {}
 
-  private async get<T>(path: string, params?: Record<string, any>): Promise<T> {
+  private async get<T>(path: string, params?: Record<string, any>, attempt = 0): Promise<T> {
     try {
       const obs = this.http.get<T>(`${BASE_URL}${path}`, { params });
       const res = await lastValueFrom(obs);
       return res.data as T;
     } catch (err: any) {
       const status = err?.response?.status ?? HttpStatus.BAD_GATEWAY;
+
+      // OpenF1 rate-limita pedidos concurrentes (429) -- getRaceTelemetry dispara laps/stints/
+      // pit/weather en paralelo con Promise.all, así que es fácil pisarse. Reintentamos un par
+      // de veces con backoff antes de darnos por vencidos.
+      if (status === 429 && attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+        return this.get<T>(path, params, attempt + 1);
+      }
+
       const message = err?.response?.data ?? err?.message ?? 'OpenF1 request failed';
       throw new HttpException(
         {
