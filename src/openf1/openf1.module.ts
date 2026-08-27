@@ -5,10 +5,12 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { OpenF1Service } from './openf1.service';
 import { OpenF1Controller } from './openf1.controller';
+import { CacheModule } from '../cache/cache.module';
 
 @Module({
   imports: [
     HttpModule,
+    CacheModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',

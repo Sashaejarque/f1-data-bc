@@ -2,7 +2,15 @@ import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags, ApiParam, ApiOkResponse, ApiServiceUnavailableResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { OpenF1Service } from './openf1.service';
-import { DriverSummary, LastRaceResult, RaceTelemetry, RaceAnalysis } from './openf1.interfaces';
+import {
+  DriverSummary,
+  LastRaceResult,
+  RaceTelemetry,
+  RaceAnalysis,
+  RaceResultsSummary,
+  RaceStrategySummary,
+  ChampionshipStandings,
+} from './openf1.interfaces';
 
 @Controller('openf1')
 @ApiTags('openf1')
@@ -206,5 +214,52 @@ export class OpenF1Controller {
     @Param('driverNumber', ParseIntPipe) driverNumber: number,
   ): Promise<RaceAnalysis> {
     return this.openf1.getRaceAnalysis(sessionKey, driverNumber);
+  }
+
+  // GET /openf1/races/latest/results
+  @Get('races/latest/results')
+  @ApiOperation({
+    summary: 'Full classification of the latest race',
+    description: 'All drivers of the most recent race in a single OpenF1 call (position, points, gap, DNF). No AI involved.',
+  })
+  async getLatestRaceResults(): Promise<RaceResultsSummary> {
+    return this.openf1.getLatestRaceResults();
+  }
+
+  // GET /openf1/races/latest/strategy
+  @Get('races/latest/strategy')
+  @ApiOperation({
+    summary: 'Tyre strategy for the whole field in the latest race',
+    description: 'Pit stop count and compound sequence per driver for the most recent race. No AI involved.',
+  })
+  async getLatestRaceStrategy(): Promise<RaceStrategySummary> {
+    return this.openf1.getLatestRaceStrategy();
+  }
+
+  // GET /openf1/standings/:year
+  @Get('standings/:year')
+  @ApiOperation({
+    summary: 'Cumulative championship standings for a season',
+    description: 'Sums points across every race session already run in the given year. Cached in Mongo after the first computation; later calls only fold in new races.',
+  })
+  @ApiParam({ name: 'year', type: Number, description: 'Season year, e.g. 2026' })
+  async getChampionshipStandings(
+    @Param('year', ParseIntPipe) year: number,
+  ): Promise<ChampionshipStandings> {
+    return this.openf1.getChampionshipStandings(year);
+  }
+
+  // GET /openf1/races/latest/overview
+  @Throttle({ default: { limit: 3, ttl: 60 } })
+  @Get('races/latest/overview')
+  @ApiOperation({
+    summary: 'AI-powered overview of the latest race as a whole',
+    description: 'One Groq call per race (not per driver) summarizing the full field -- classification, strategies, weather. Cached in Mongo like the per-driver analysis.',
+  })
+  @ApiServiceUnavailableResponse({
+    description: 'AI analysis service is temporarily unavailable',
+  })
+  async getLatestRaceOverview(): Promise<RaceAnalysis> {
+    return this.openf1.getLatestRaceOverview();
   }
 }

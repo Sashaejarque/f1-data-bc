@@ -18,7 +18,15 @@ import {
   WeatherSnapshot,
   PitStopInfo,
   RaceAnalysis,
+  RaceClassificationEntry,
+  RaceResultsSummary,
+  DriverStrategyEntry,
+  RaceStrategySummary,
+  StandingsEntry,
+  ChampionshipStandings,
+  WeatherSummaryDTO,
 } from './openf1.interfaces';
+import { CacheService } from '../cache/cache.service';
 
 const BASE_URL = 'https://api.openf1.org/v1';
 
@@ -79,7 +87,10 @@ function omitNullsDeep<T>(value: T): T {
 
 @Injectable()
 export class OpenF1Service {
-  constructor(private readonly http: HttpService) {}
+  constructor(
+    private readonly http: HttpService,
+    private readonly cache: CacheService,
+  ) {}
 
   private async get<T>(path: string, params?: Record<string, any>, attempt = 0): Promise<T> {
     try {
@@ -123,25 +134,35 @@ export class OpenF1Service {
     }
   }
 
-  // Busca la sesión de carrera más reciente que ya haya ocurrido, empezando por el año
-  // actual y cayendo al año anterior si todavía no se corrió ninguna (ej. en enero/febrero).
-  private async findLatestPastRaceSession(year: number, nowMs: number): Promise<SessionApiDTO> {
+  // Todas las sesiones de carrera que ya ocurrieron en el año dado, ordenadas de más vieja
+  // a más nueva. Si el año todavía no tiene ninguna carrera corrida (ej. en enero/febrero
+  // antes de la primera cita), cae al año anterior -- esto lo usan tanto "última carrera"
+  // como el campeonato acumulado (necesita TODAS, no solo la última).
+  private async findPastRaceSessions(year: number, nowMs: number): Promise<SessionApiDTO[]> {
     const sessions = await this.get<SessionApiDTO[]>('/sessions', { year, session_type: 'Race' });
-    const past = (sessions ?? []).filter((s) => {
-      const t = parseISO(s.date_start);
-      return t != null && t <= nowMs;
-    });
+    const past = (sessions ?? [])
+      .filter((s) => {
+        const t = parseISO(s.date_start);
+        return t != null && t <= nowMs;
+      })
+      .sort((a, b) => (parseISO(a.date_start) ?? 0) - (parseISO(b.date_start) ?? 0));
 
-    if (past.length > 0) {
-      return past.reduce((a, b) => (parseISO(a.date_start)! > parseISO(b.date_start)! ? a : b));
-    }
+    if (past.length > 0) return past;
 
     if (year > 2018) {
-      // Sin carreras corridas todavía este año -- probar con el año anterior.
-      return this.findLatestPastRaceSession(year - 1, nowMs);
+      return this.findPastRaceSessions(year - 1, nowMs);
     }
 
-    throw new HttpException({ message: 'No past race sessions found' }, HttpStatus.NOT_FOUND);
+    return [];
+  }
+
+  // Busca la sesión de carrera más reciente que ya haya ocurrido.
+  private async findLatestPastRaceSession(year: number, nowMs: number): Promise<SessionApiDTO> {
+    const past = await this.findPastRaceSessions(year, nowMs);
+    if (past.length === 0) {
+      throw new HttpException({ message: 'No past race sessions found' }, HttpStatus.NOT_FOUND);
+    }
+    return past[past.length - 1];
   }
 
   // CASO DE USO 1: Maestro de Pilotos
@@ -312,6 +333,14 @@ export class OpenF1Service {
       );
     }
 
+    // El análisis de una carrera ya corrida es inmutable para siempre -- si ya se calculó
+    // antes para este piloto+sesión, se devuelve directo sin volver a gastar cuota de Groq
+    // ni pegarle de nuevo a OpenF1. Ver docs/RAG-PLAN.md.
+    const cached = await this.cache.getDriverAnalysis(sessionKey, driverNumber);
+    if (cached) {
+      return { ...cached, cached: true };
+    }
+
     try {
       // Obtener telemetría base
       const telemetryData = await this.getRaceTelemetry(sessionKey, driverNumber);
@@ -325,7 +354,8 @@ export class OpenF1Service {
       });
       const response = await lastValueFrom(obs);
 
-      return response.data;
+      await this.cache.saveDriverAnalysis(sessionKey, driverNumber, response.data);
+      return { ...response.data, cached: false };
     } catch (err: any) {
       // Si es un error de telemetría, propagar
       if (err instanceof HttpException) {
@@ -346,5 +376,249 @@ export class OpenF1Service {
         status === HttpStatus.NOT_FOUND ? HttpStatus.SERVICE_UNAVAILABLE : status,
       );
     }
+  }
+
+  // CASO DE USO 5: Clasificación completa de la última carrera (dashboard)
+  // Una sola consulta a /session_result sin filtrar por piloto trae los ~22 a la vez --
+  // ver docs/DASHBOARD-PLAN.md, "truco clave". Nada de esto pega a la IA.
+  async getLatestRaceResults(): Promise<RaceResultsSummary> {
+    const now = Date.now();
+    const currentYear = new Date(now).getFullYear();
+    const latest = await this.findLatestPastRaceSession(currentYear, now);
+    return this.buildRaceResultsSummary(latest, currentYear);
+  }
+
+  private async buildRaceResultsSummary(session: SessionApiDTO, year: number): Promise<RaceResultsSummary> {
+    const sessionKey = session.session_key;
+
+    const [results, drivers] = await Promise.all([
+      this.getOrEmpty<SessionResultApiDTO[]>('/session_result', { session_key: sessionKey }),
+      this.getActiveDrivers(),
+    ]);
+
+    const driverByNumber = new Map(drivers.map((d) => [d.driver_number, d]));
+
+    const classification: RaceClassificationEntry[] = results
+      .map((r) => {
+        const info = driverByNumber.get(r.driver_number);
+        return {
+          driverNumber: r.driver_number,
+          fullName: info?.full_name ?? `#${r.driver_number}`,
+          teamName: info?.team_name,
+          teamColour: info?.team_colour,
+          position: r.position ?? null,
+          points: r.points ?? 0,
+          dnf: r.dnf ?? false,
+          gapToLeader: r.gap_to_leader ?? null,
+        };
+      })
+      .sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER));
+
+    return {
+      sessionKey,
+      circuitShortName: session.circuit_short_name ?? null,
+      year,
+      classification,
+    };
+  }
+
+  // CASO DE USO 6: Estrategia de gomas del campo completo (dashboard)
+  // Mismo truco: /stints y /pit sin filtrar por piloto traen el campo entero en una llamada.
+  async getLatestRaceStrategy(): Promise<RaceStrategySummary> {
+    const now = Date.now();
+    const currentYear = new Date(now).getFullYear();
+    const latest = await this.findLatestPastRaceSession(currentYear, now);
+    return this.buildRaceStrategySummary(latest.session_key);
+  }
+
+  private async buildRaceStrategySummary(sessionKey: number): Promise<RaceStrategySummary> {
+    const [stints, pits] = await Promise.all([
+      this.getOrEmpty<StintApiDTO[]>('/stints', { session_key: sessionKey }),
+      this.getOrEmpty<PitApiDTO[]>('/pit', { session_key: sessionKey }),
+    ]);
+
+    const pitCountByDriver = new Map<number, number>();
+    for (const p of pits) {
+      pitCountByDriver.set(p.driver_number, (pitCountByDriver.get(p.driver_number) ?? 0) + 1);
+    }
+
+    const stintsByDriver = new Map<number, StintApiDTO[]>();
+    for (const s of stints) {
+      const arr = stintsByDriver.get(s.driver_number) ?? [];
+      arr.push(s);
+      stintsByDriver.set(s.driver_number, arr);
+    }
+
+    const strategies: DriverStrategyEntry[] = Array.from(stintsByDriver.entries()).map(
+      ([driverNumber, driverStints]) => ({
+        driverNumber,
+        pitStopCount: pitCountByDriver.get(driverNumber) ?? 0,
+        compoundSequence: [...driverStints]
+          .sort((a, b) => a.lap_start - b.lap_start)
+          .map((s) => s.compound ?? 'UNKNOWN'),
+      }),
+    );
+
+    return { sessionKey, strategies };
+  }
+
+  // CASO DE USO 7: Campeonato acumulado (dashboard)
+  // Costoso solo la primera vez que se pide un año (una llamada a /session_result por cada
+  // carrera ya corrida, en secuencia para no pisar el rate limit de OpenF1). Después queda
+  // en Mongo y los pedidos siguientes solo suman las carreras nuevas desde el último snapshot.
+  async getChampionshipStandings(year: number): Promise<ChampionshipStandings> {
+    const now = Date.now();
+    const pastSessions = await this.findPastRaceSessions(year, now);
+
+    if (pastSessions.length === 0) {
+      throw new HttpException({ message: `No hay carreras corridas todavía en ${year}` }, HttpStatus.NOT_FOUND);
+    }
+
+    const latestSessionKey = pastSessions[pastSessions.length - 1].session_key;
+    const cached = await this.cache.getStandingsSnapshot(year);
+    if (cached && cached.computedThroughSessionKey === latestSessionKey) {
+      return cached;
+    }
+
+    let pointsByDriver = new Map<number, number>();
+    let sessionsToProcess = pastSessions;
+
+    if (cached) {
+      const idx = pastSessions.findIndex((s) => s.session_key === cached.computedThroughSessionKey);
+      if (idx >= 0) {
+        // Incremental: solo procesar las carreras nuevas desde el último snapshot guardado.
+        sessionsToProcess = pastSessions.slice(idx + 1);
+        pointsByDriver = new Map(cached.standings.map((s) => [s.driverNumber, s.points]));
+      }
+    }
+
+    for (const session of sessionsToProcess) {
+      const results = await this.getOrEmpty<SessionResultApiDTO[]>('/session_result', {
+        session_key: session.session_key,
+      });
+      for (const r of results) {
+        const prev = pointsByDriver.get(r.driver_number) ?? 0;
+        pointsByDriver.set(r.driver_number, prev + (r.points ?? 0));
+      }
+    }
+
+    const drivers = await this.getActiveDrivers();
+    const driverByNumber = new Map(drivers.map((d) => [d.driver_number, d]));
+
+    const standings: StandingsEntry[] = Array.from(pointsByDriver.entries())
+      .map(([driverNumber, points]) => {
+        const info = driverByNumber.get(driverNumber);
+        return {
+          driverNumber,
+          fullName: info?.full_name ?? `#${driverNumber}`,
+          teamName: info?.team_name,
+          teamColour: info?.team_colour,
+          points,
+        };
+      })
+      .sort((a, b) => b.points - a.points);
+
+    const snapshot: ChampionshipStandings = {
+      year,
+      computedThroughSessionKey: latestSessionKey,
+      standings,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await this.cache.saveStandingsSnapshot(year, snapshot);
+    return snapshot;
+  }
+
+  // CASO DE USO 8: Análisis de IA de la carrera completa (dashboard)
+  // Una sola llamada a Groq por carrera (no 22) -- arma un resumen agregado del campo
+  // (clasificación + estrategias + clima) y se lo manda a /analyze-race en f1-ia-engineer.
+  // Cacheado igual que el análisis por piloto (ver docs/DASHBOARD-PLAN.md Etapa 4).
+  async getLatestRaceOverview(): Promise<RaceAnalysis> {
+    const now = Date.now();
+    const currentYear = new Date(now).getFullYear();
+    const latest = await this.findLatestPastRaceSession(currentYear, now);
+    const sessionKey = latest.session_key;
+
+    const cached = await this.cache.getRaceOverview(sessionKey);
+    if (cached) {
+      return { ...cached, cached: true };
+    }
+
+    const aiServiceUrl = process.env.AI_SERVICE_URL;
+    const aiServiceSecret = process.env.AI_SERVICE_SECRET;
+
+    if (!aiServiceUrl) {
+      throw new HttpException(
+        { message: 'AI_SERVICE_URL not configured in environment variables' },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+    if (!aiServiceSecret) {
+      throw new HttpException(
+        { message: 'AI_SERVICE_SECRET not configured in environment variables' },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+
+    try {
+      const [resultsSummary, strategySummary, weather] = await Promise.all([
+        this.buildRaceResultsSummary(latest, currentYear),
+        this.buildRaceStrategySummary(sessionKey),
+        this.getOrEmpty<WeatherApiDTO[]>('/weather', { session_key: sessionKey }),
+      ]);
+
+      const payload = {
+        sessionKey,
+        circuitShortName: latest.circuit_short_name ?? null,
+        year: currentYear,
+        classification: resultsSummary.classification,
+        strategies: strategySummary.strategies,
+        weather: this.buildWeatherSummary(weather),
+      };
+
+      const obs = this.http.post<RaceAnalysis>(`${aiServiceUrl}/analyze-race`, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Secret': aiServiceSecret,
+        },
+      });
+      const response = await lastValueFrom(obs);
+
+      await this.cache.saveRaceOverview(sessionKey, response.data);
+      return { ...response.data, cached: false };
+    } catch (err: any) {
+      if (err instanceof HttpException) {
+        throw err;
+      }
+
+      const status = err?.response?.status ?? HttpStatus.SERVICE_UNAVAILABLE;
+      const message = err?.response?.data ?? err?.message ?? 'AI race overview service failed';
+
+      throw new HttpException(
+        {
+          message: 'AI race overview service temporarily unavailable',
+          details: message,
+          sessionKey,
+        },
+        status === HttpStatus.NOT_FOUND ? HttpStatus.SERVICE_UNAVAILABLE : status,
+      );
+    }
+  }
+
+  private buildWeatherSummary(weather: WeatherApiDTO[]): WeatherSummaryDTO | null {
+    if (!weather || weather.length === 0) return null;
+
+    const sorted = [...weather].sort((a, b) => (parseISO(a.date) ?? 0) - (parseISO(b.date) ?? 0));
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const rained = weather.some((w) => w.is_raining === true || (w.rainfall != null && w.rainfall > 0));
+
+    return {
+      airTempStart: first.air_temperature ?? null,
+      airTempEnd: last.air_temperature ?? null,
+      trackTempStart: first.track_temperature ?? null,
+      trackTempEnd: last.track_temperature ?? null,
+      rained,
+    };
   }
 }

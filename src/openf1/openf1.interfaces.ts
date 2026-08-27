@@ -17,6 +17,7 @@ export interface SessionApiDTO {
   name?: string;
   date_start: string; // ISO
   date_end: string;   // ISO
+  circuit_short_name?: string;
 }
 
 export interface SessionResultApiDTO {
@@ -25,6 +26,8 @@ export interface SessionResultApiDTO {
   position?: number | null;
   points?: number | null;
   classified_status?: string | null;
+  dnf?: boolean | null;
+  gap_to_leader?: string | number | null;
 }
 
 export interface PositionApiDTO {
@@ -160,6 +163,62 @@ export interface RaceAnalysis extends AIOutput {
     notes?: string;
   }>;
   [key: string]: any; // Flexible para cualquier estructura de respuesta del AI
+}
+
+// Dashboard: clasificación de una carrera (todos los pilotos, una sola consulta)
+export interface RaceClassificationEntry {
+  driverNumber: number;
+  fullName: string;
+  teamName?: string;
+  teamColour?: string;
+  position: number | null;
+  points: number;
+  dnf: boolean;
+  gapToLeader?: string | number | null;
+}
+
+export interface RaceResultsSummary {
+  sessionKey: number;
+  circuitShortName: string | null;
+  year: number;
+  classification: RaceClassificationEntry[];
+}
+
+// Dashboard: estrategia de gomas del campo completo
+export interface DriverStrategyEntry {
+  driverNumber: number;
+  pitStopCount: number;
+  compoundSequence: string[];
+}
+
+export interface RaceStrategySummary {
+  sessionKey: number;
+  strategies: DriverStrategyEntry[];
+}
+
+// Dashboard: campeonato acumulado
+export interface StandingsEntry {
+  driverNumber: number;
+  fullName: string;
+  teamName?: string;
+  teamColour?: string;
+  points: number;
+}
+
+export interface ChampionshipStandings {
+  year: number;
+  computedThroughSessionKey: number;
+  standings: StandingsEntry[];
+  updatedAt: string;
+}
+
+// Dashboard: resumen de clima compacto para el prompt de análisis de carrera
+export interface WeatherSummaryDTO {
+  airTempStart: number | null;
+  airTempEnd: number | null;
+  trackTempStart: number | null;
+  trackTempEnd: number | null;
+  rained: boolean | null;
 }
 
 export type AxiosObs<T> = Promise<AxiosResponse<T>>;
