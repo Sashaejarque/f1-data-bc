@@ -215,10 +215,13 @@ export class OpenF1Service {
   // CASO DE USO 3: Telemetría para Análisis (Data Merging)
   async getRaceTelemetry(sessionKey: number, driverNumber: number): Promise<RaceTelemetry> {
     try {
+      // laps/stints/pit vía getOrEmpty: un piloto que abandonó temprano (ej. choque en vuelta 1)
+      // puede no tener filas en alguno de estos -- OpenF1 responde 404 en vez de un array vacío
+      // para esos casos (mismo comportamiento que en /session_result, ver getLastRaceResult).
       const [laps, stints, pits, weather] = await Promise.all([
-        this.get<LapApiDTO[]>('/laps', { session_key: sessionKey, driver_number: driverNumber }),
-        this.get<StintApiDTO[]>('/stints', { session_key: sessionKey, driver_number: driverNumber }),
-        this.get<PitApiDTO[]>('/pit', { session_key: sessionKey, driver_number: driverNumber }),
+        this.getOrEmpty<LapApiDTO[]>('/laps', { session_key: sessionKey, driver_number: driverNumber }),
+        this.getOrEmpty<StintApiDTO[]>('/stints', { session_key: sessionKey, driver_number: driverNumber }),
+        this.getOrEmpty<PitApiDTO[]>('/pit', { session_key: sessionKey, driver_number: driverNumber }),
         this.get<WeatherApiDTO[]>('/weather', { session_key: sessionKey }),
       ]);
 
@@ -279,8 +282,10 @@ export class OpenF1Service {
       const result = { raceSummary, pitStops, telemetry };
       return omitNullsDeep(result) as RaceTelemetry;
     } catch (err: any) {
-      const status = err?.response?.status ?? HttpStatus.BAD_GATEWAY;
-      const message = err?.response?.data ?? err?.message ?? 'OpenF1 telemetry merge failed';
+      // err ya es el HttpException que arma get() (no un AxiosError), así que el status real
+      // está en getStatus(), no en err.response.status -- eso siempre daba BAD_GATEWAY.
+      const status = err instanceof HttpException ? err.getStatus() : HttpStatus.BAD_GATEWAY;
+      const message = err instanceof HttpException ? err.getResponse() : (err?.message ?? 'OpenF1 telemetry merge failed');
       throw new HttpException(
         { message: 'OpenF1 telemetry error', details: message, sessionKey, driverNumber },
         status,
