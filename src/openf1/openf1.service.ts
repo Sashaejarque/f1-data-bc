@@ -110,6 +110,40 @@ export class OpenF1Service {
     }
   }
 
+  // Igual que get<T>, pero un 404 de OpenF1 (que usa para "no hay filas", no un array vacío)
+  // se trata como resultado vacío en vez de propagarse como error.
+  private async getOrEmpty<T extends any[]>(path: string, params?: Record<string, any>): Promise<T> {
+    try {
+      return await this.get<T>(path, params);
+    } catch (err: any) {
+      if (err instanceof HttpException && err.getStatus() === HttpStatus.NOT_FOUND) {
+        return [] as unknown as T;
+      }
+      throw err;
+    }
+  }
+
+  // Busca la sesión de carrera más reciente que ya haya ocurrido, empezando por el año
+  // actual y cayendo al año anterior si todavía no se corrió ninguna (ej. en enero/febrero).
+  private async findLatestPastRaceSession(year: number, nowMs: number): Promise<SessionApiDTO> {
+    const sessions = await this.get<SessionApiDTO[]>('/sessions', { year, session_type: 'Race' });
+    const past = (sessions ?? []).filter((s) => {
+      const t = parseISO(s.date_start);
+      return t != null && t <= nowMs;
+    });
+
+    if (past.length > 0) {
+      return past.reduce((a, b) => (parseISO(a.date_start)! > parseISO(b.date_start)! ? a : b));
+    }
+
+    if (year > 2018) {
+      // Sin carreras corridas todavía este año -- probar con el año anterior.
+      return this.findLatestPastRaceSession(year - 1, nowMs);
+    }
+
+    throw new HttpException({ message: 'No past race sessions found' }, HttpStatus.NOT_FOUND);
+  }
+
   // CASO DE USO 1: Maestro de Pilotos
   async getActiveDrivers(): Promise<DriverSummary[]> {
     const drivers = await this.get<DriverApiDTO[]>('/drivers', { session_key: 'latest' });
@@ -130,32 +164,26 @@ export class OpenF1Service {
     }));
   }
 
-  // CASO DE USO 2: Última Carrera del Piloto (hardcoded 2025)
+  // CASO DE USO 2: Última Carrera del Piloto
   async getLastRaceResult(driverNumber: number): Promise<LastRaceResult> {
-    const year = 2025; // hardcoded per requirement
+    // El año se calcula en vez de hardcodearse: la parrilla de /drivers (session_key=latest)
+    // siempre refleja el roster vigente, así que "la última carrera" tiene que ser del mismo
+    // año -- fijarlo a un año pasado dejaba a los pilotos que cambiaron de número/equipo (o
+    // los rookies nuevos) sin session_result para esa sesión, y OpenF1 respondía 404.
+    const now = Date.now();
+    const currentYear = new Date(now).getFullYear();
 
-    // Paso 1: obtener la sesión de carrera más reciente según el array devuelto
-    const sessions = await this.get<SessionApiDTO[]>(
-      '/sessions',
-      { year, session_type: 'Race' },
-    );
-
-    if (!sessions || sessions.length === 0) {
-      throw new HttpException(
-        { message: `No race sessions found for ${year}` },
-        HttpStatus.NOT_FOUND,
-      );
-    }
-
-    // Se asume que la última posición del array es la carrera más reciente
-    const latest = sessions[sessions.length - 1];
+    const latest = await this.findLatestPastRaceSession(currentYear, now);
     const sessionKey = latest.session_key;
 
     // Paso 2: obtener resultado vía /session_result
     let position: number | null = null;
     let points: number | null = null;
 
-    const sessionResults = await this.get<SessionResultApiDTO[]>(
+    // OpenF1 devuelve 404 (no un array vacío) para /session_result cuando el piloto no tiene
+    // fila en esa sesión (ej. no llegó a correr esa carrera) -- lo tratamos como "sin resultado"
+    // en vez de dejar que el 404 se propague crudo hasta el dashboard.
+    const sessionResults = await this.getOrEmpty<SessionResultApiDTO[]>(
       '/session_result',
       { session_key: sessionKey, driver_number: driverNumber },
     );
@@ -166,7 +194,7 @@ export class OpenF1Service {
       points = sr.points ?? null;
     } else {
       // Fallback: /position (beta)
-      const positions = await this.get<PositionApiDTO[]>(
+      const positions = await this.getOrEmpty<PositionApiDTO[]>(
         '/position',
         { session_key: sessionKey, driver_number: driverNumber },
       );
