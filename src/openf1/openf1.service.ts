@@ -345,8 +345,19 @@ export class OpenF1Service {
       // Obtener telemetría base
       const telemetryData = await this.getRaceTelemetry(sessionKey, driverNumber);
 
+      // RAG-PLAN Etapas 2-3: vector de features de la carrera actual (cómputo determinístico,
+      // gratis, no llama a Groq) y búsqueda del precedente más parecido entre lo ya analizado.
+      // Si cualquiera de los dos pasos falla, seguimos sin precedente -- el análisis principal
+      // no depende de esto, es una mejora, no un requisito.
+      const currentFeatures = await this.extractFeatures(telemetryData, aiServiceUrl, aiServiceSecret);
+      const precedent = currentFeatures
+        ? await this.findPrecedent(sessionKey, driverNumber, currentFeatures)
+        : null;
+
+      const requestBody = precedent ? { ...telemetryData, precedent } : telemetryData;
+
       // Enviar al servicio de IA con header de autenticación
-      const obs = this.http.post<RaceAnalysis>(`${aiServiceUrl}/analyze`, telemetryData, {
+      const obs = this.http.post<RaceAnalysis>(`${aiServiceUrl}/analyze`, requestBody, {
         headers: {
           'Content-Type': 'application/json',
           'X-Internal-Secret': aiServiceSecret,
@@ -354,8 +365,10 @@ export class OpenF1Service {
       });
       const response = await lastValueFrom(obs);
 
-      await this.cache.saveDriverAnalysis(sessionKey, driverNumber, response.data);
-      return { ...response.data, cached: false };
+      const circuitShortName = await this.resolveCircuitShortName(sessionKey);
+      const toStore = { ...response.data, circuitShortName };
+      await this.cache.saveDriverAnalysis(sessionKey, driverNumber, toStore);
+      return { ...toStore, cached: false };
     } catch (err: any) {
       // Si es un error de telemetría, propagar
       if (err instanceof HttpException) {
@@ -602,6 +615,111 @@ export class OpenF1Service {
         },
         status === HttpStatus.NOT_FOUND ? HttpStatus.SERVICE_UNAVAILABLE : status,
       );
+    }
+  }
+
+  // RAG-PLAN Etapa 2: le pide a f1-ia-engineer el vector de features de esta telemetría --
+  // es un cómputo determinístico (paradas, gomas, degradación), no pasa por Groq, así que
+  // no cuesta cuota. Si falla, no bloquea el análisis principal, solo no hay retrieval.
+  private async extractFeatures(
+    telemetryData: RaceTelemetry,
+    aiServiceUrl: string,
+    aiServiceSecret: string,
+  ): Promise<Record<string, any> | null> {
+    try {
+      const obs = this.http.post(`${aiServiceUrl}/extract-features`, telemetryData, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Secret': aiServiceSecret,
+        },
+      });
+      const response = await lastValueFrom(obs);
+      return response.data as Record<string, any>;
+    } catch {
+      return null;
+    }
+  }
+
+  // RAG-PLAN Etapa 3: busca, entre lo ya analizado y cacheado, la carrera más parecida a
+  // la actual por similitud coseno sobre el vector de features + solapamiento de gomas.
+  // Heurística simple a propósito: el corpus recién empieza a crecer con el uso real, no
+  // hace falta (ni se justifica) un motor de vector search para esto.
+  private async findPrecedent(
+    excludeSessionKey: number,
+    excludeDriverNumber: number,
+    currentFeatures: Record<string, any>,
+  ): Promise<{ circuitShortName: string | null; similarity: number; pitStopCount: number; compoundSequence: string[]; summary: string } | null> {
+    const candidates = await this.cache.getAllDriverAnalysesWithFeatures();
+    if (candidates.length === 0) return null;
+
+    const currentVec = this.featuresToVector(currentFeatures);
+    let best: { score: number; candidate: (typeof candidates)[number] } | null = null;
+
+    for (const candidate of candidates) {
+      if (candidate.sessionKey === excludeSessionKey && candidate.driverNumber === excludeDriverNumber) continue;
+      if (!candidate.features) continue;
+
+      const numericScore = this.cosineSimilarity(currentVec, this.featuresToVector(candidate.features));
+      const overlapScore = this.compoundOverlap(currentFeatures.compoundSequence, candidate.features.compoundSequence);
+      const score = numericScore * 0.7 + overlapScore * 0.3;
+
+      if (!best || score > best.score) {
+        best = { score, candidate };
+      }
+    }
+
+    // Umbral bajo a propósito -- el corpus todavía es chico, mejor un precedente mediocre
+    // con su similarity real visible en el prompt (el LLM puede ponderarlo) que ninguno.
+    if (!best || best.score < 0.3) return null;
+
+    return {
+      circuitShortName: best.candidate.circuitShortName ?? null,
+      similarity: Math.round(best.score * 100) / 100,
+      pitStopCount: best.candidate.features.pitStopCount ?? 0,
+      compoundSequence: best.candidate.features.compoundSequence ?? [],
+      summary: (best.candidate.summary ?? '').slice(0, 300),
+    };
+  }
+
+  private featuresToVector(f: Record<string, any>): number[] {
+    return [
+      f.pitStopCount ?? 0,
+      f.firstPitLap ?? 0,
+      f.trackTempDelta ?? 0,
+      (f.avgDegradationSlope ?? 0) * 10, // escalado para pesar comparable a los otros ejes
+    ];
+  }
+
+  private cosineSimilarity(a: number[], b: number[]): number {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
+    }
+    if (normA === 0 || normB === 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  private compoundOverlap(a: string[] = [], b: string[] = []): number {
+    if (!a?.length || !b?.length) return 0;
+    const setA = new Set(a);
+    const setB = new Set(b);
+    let intersection = 0;
+    for (const c of setA) {
+      if (setB.has(c)) intersection++;
+    }
+    return intersection / Math.max(setA.size, setB.size);
+  }
+
+  private async resolveCircuitShortName(sessionKey: number): Promise<string | null> {
+    try {
+      const sessions = await this.getOrEmpty<SessionApiDTO[]>('/sessions', { session_key: sessionKey });
+      return sessions[0]?.circuit_short_name ?? null;
+    } catch {
+      return null;
     }
   }
 

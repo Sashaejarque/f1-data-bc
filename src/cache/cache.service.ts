@@ -65,6 +65,19 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     return (doc as unknown as RaceAnalysis) ?? null;
   }
 
+  // RAG-PLAN Etapa 3: corpus para retrieval por similitud -- solo lo que hace falta para
+  // comparar (features + un resumen corto), no el análisis completo. El corpus de una demo
+  // como esta entra sin problema en memoria, no hace falta que esto sea una query indexada.
+  async getAllDriverAnalysesWithFeatures(): Promise<
+    Array<{ sessionKey: number; driverNumber: number; features?: any; summary?: string; circuitShortName?: string | null }>
+  > {
+    if (!this.enabled) return [];
+    const docs = await this.db!.collection(RACE_ANALYSES)
+      .find({ features: { $exists: true } }, { projection: { _id: 0, sessionKey: 1, driverNumber: 1, features: 1, summary: 1, circuitShortName: 1 } })
+      .toArray();
+    return docs as any;
+  }
+
   async saveDriverAnalysis(sessionKey: number, driverNumber: number, analysis: RaceAnalysis): Promise<void> {
     if (!this.enabled) return;
     try {
