@@ -181,8 +181,16 @@ export class OpenF1Service {
       full_name: d.full_name,
       team_name: d.team_name,
       team_colour: d.team_colour,
-      headshot_url: d.headshot_url,
+      headshot_url: this.upscaleHeadshotUrl(d.headshot_url),
     }));
+  }
+
+  // OpenF1 sirve los headshots desde Cloudinary con un transform tipo "/1col/",
+  // que devuelve apenas ~93x93px -- se ve borroso al escalarse en las tarjetas
+  // del dashboard. Pedimos un transform más grande (~997x997, cerca del original).
+  private upscaleHeadshotUrl(url?: string): string | undefined {
+    if (!url) return url;
+    return url.replace(/\/\d+col\//, '/9col/');
   }
 
   // CASO DE USO 2: Última Carrera del Piloto
